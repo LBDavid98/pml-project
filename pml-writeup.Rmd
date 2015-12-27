@@ -1,0 +1,76 @@
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache=TRUE)
+```
+---
+title: "Practical Machine Learning - Course Project Writeup"
+output: html_document
+---
+
+### by David Hook
+
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+library(caret)
+library(ggplot2)
+library(doParallel)
+library(randomForest)
+```
+
+## Executive Overview
+
+The data provided courtesy of <http://groupware.les.inf.puc-rio.br/har> records the activities of six participants performing dumbell lifts correctly and incorrectly in 5 different manners. The object of this assignment was to create a machine learning algorithm that could use the data provided to accurately detect which of the five classes of movements (labeled A:E) was being performed by the test subject.
+
+Ultimatlely I settled on the random forest method and was able to create a model fit with 98.22% accuracy and a 95% confidence interval of .9784 to .9854.
+
+## Data processing and exploration
+
+After importing the data and splitting it into test and training sets I took a look at the data and determined there were 160 variables being observed. A quick attempt at modeling the data using random forest choked my computer to death, so I decided to prune it down.
+
+```{r}
+setwd("e:/R/pml-project/")
+data <- read.csv("pml-training.csv") # 160 Variables
+set.seed(31313)
+inTraining <- createDataPartition(y=data$classe, p=0.7, list=FALSE)
+training <- data[inTraining,]
+testing <- data[-inTraining,]
+```
+First I removed any variables with zero variance using the 'caret' package, then I removed columns with NA values. Finally I removed data that I felt had no predictive value, like the subject and time stamp of the activity.
+```{r}
+remove <- nearZeroVar(training)
+training <- training[,-remove] # 105 Variables
+na.columns <- sapply(training, function(x) any(is.na(x)))
+training <- training[,-which(na.columns)] # 59 variables
+training <- training[,7:59] # 53 Variables
+```
+
+## Creating a model fit
+### Decision process
+My first attempt at running the model ran for hours without producing a result. It occured to me that I didn't need all of the data to build a model, so I subset it initially into 1000 records, then 2500, and finally 6000 records. When I attempted to boost over 4000 observations my computer froze again so I researched how to use parallel processing power to speed up the process. 6000 observations provided me with a good blend of speed and accuracy so I settled on that model.
+
+* Subset 1000, run time 4 minutes, accuracy 90.54%
+* Subset 2500, run time 13 minutes, accuracy  95.12%
+* Subset 6000, parallel run time 15 minutes, accuracy 98.2%
+
+*Note:* For this markdown I had to run it for a subset of 2500, attempts to go larger received the following error: Cannot allocate vector of size 274.7 mb.
+
+
+```{r}
+subTrain <- sample(dim(training)[1], 2500, replace=FALSE)
+subTrain <- training[subTrain,]
+
+# Set up parallel processing
+cl <- makeCluster(detectCores())
+registerDoParallel(cl)
+modFit.partial <- train(classe ~ .,data=subTrain,method="rf",prox=TRUE)
+stopCluster(cl)
+```
+## Testing model accuracy and error estimation
+The model fit for the reduced sample size was 95.41% accurate on the test data, with a 98% confidence interval that it would be between 94.85 and 95.93% accurate. 
+
+```{r}
+confusionMatrix(testing$classe, predict(modFit.partial, testing))
+```
+"In random forests, there is no need for cross-validation or a separate test set to get an unbiased estimate of the test set error. It is estimated internally, during the run, as follows:
+
+Each tree is constructed using a different bootstrap sample from the original data. About one-third of the cases are left out of the bootstrap sample and not used in the construction of the kth tree.""
+<http://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm#ooberr>
